@@ -1,5 +1,5 @@
-#include "../lib/unp.h"
-#include "sigchldwait.c"
+/* include fig01 */
+#include "./unp.h"
 
 #define BUFSIZE 8096
 
@@ -63,53 +63,87 @@ void handle_cli(int fd){
     while ((ret=read(file_fd, buffer, BUFSIZE))>0) {
         write(fd,buffer,ret);
     }
-
-    exit(1);
 }
 
 int
 main(int argc, char **argv)
 {
-	int listenfd, connfd;
-	pid_t childpid;
+	int i, maxi, maxfd, listenfd, connfd, sockfd;
+	int nready, client[FD_SETSIZE];
+	ssize_t	n;
+	fd_set rset, allset;
+	char buf[MAXLINE];
 	socklen_t clilen;
 	struct sockaddr_in cliaddr, servaddr;
-	void sig_chld(int);
 
 	listenfd = socket(AF_INET, SOCK_STREAM, 0);
 
-	bzero(&servaddr, sizeof(servaddr));	//initilize the servaddr
-	servaddr.sin_family      = AF_INET;	//AF_INET means IPv4 protocols
+	bzero(&servaddr, sizeof(servaddr));
+	servaddr.sin_family      = AF_INET;
 	servaddr.sin_addr.s_addr = htonl(INADDR_ANY);
 	servaddr.sin_port        = htons(8090);
 
-	bind(listenfd, (SA *) &servaddr, sizeof(servaddr));
 
+	bind(listenfd, (SA *) &servaddr, sizeof(servaddr));
 	listen(listenfd, LISTENQ);
 	printf("-----Web Server starts to listen-----\n");
 
-	signal(SIGCHLD, sig_chld);	/* must call waitpid() */
+	maxfd = listenfd;			/* initialize */
+	maxi = -1;					/* index into client[] array */
+	for (i = 0; i < FD_SETSIZE; i++)
+		client[i] = -1;			/* -1 indicates available entry */
+	FD_ZERO(&allset);
+	FD_SET(listenfd, &allset);
+/* end fig01 */
 
+/* include fig02 */
 	for ( ; ; ) {
+		rset = allset;		/* structure assignment */
+		nready = select(maxfd+1, &rset, NULL, NULL, NULL);
 
-		clilen = sizeof(cliaddr);
-		if ( (connfd = accept(listenfd, (SA *) &cliaddr, &clilen)) < 0) {
-			if (errno == EINTR)
-				continue;		/* back to for() */
-			else{
-				perror("accept error");
-				exit(1);
+		if (FD_ISSET(listenfd, &rset)) {	/* new client connection */
+			printf("-----There is a new client-----\n");
+			clilen = sizeof(cliaddr);
+			connfd = accept(listenfd, (SA *) &cliaddr, &clilen);
+#ifdef	NOTDEF
+			printf("new client: %s, port %d\n",
+					Inet_ntop(AF_INET, &cliaddr.sin_addr, 4, NULL),
+					ntohs(cliaddr.sin_port));
+#endif
+
+			for (i = 0; i < FD_SETSIZE; i++)
+				if (client[i] < 0) {
+					client[i] = connfd;	/* save descriptor */
+					break;
+				}
+			if (i == FD_SETSIZE){
+				perror("too many clients");
+				exit(EXIT_FAILURE);
+			}
+			
+
+			FD_SET(connfd, &allset);	/* add new descriptor to set */
+			if (connfd > maxfd)
+				maxfd = connfd;			/* for select */
+			if (i > maxi)
+				maxi = i;				/* max index in client[] array */
+			if (--nready <= 0)
+				continue;				/* no more readable descriptors */
+		}
+		for (i = 0; i <= maxi; i++) {	/* check all clients for data */
+			if ( (sockfd = client[i]) < 0)
+				continue;
+			if (FD_ISSET(sockfd, &rset)) {
+				handle_cli(sockfd);
+				close(sockfd);
+				FD_CLR(sockfd, &allset);
+				client[i] = -1;
+
+				if (--nready <= 0)
+					break;
+				/* no more readable descriptors */
 			}
 		}
-
-		if ( (childpid = fork()) == 0) {	/* child process */
-			close(listenfd);	/* close listening socket */
-
-			printf("There is a new client\n");
-			handle_cli(connfd);
-			exit(0);
-		}
-		close(connfd);			/* parent closes connected socket */
 	}
-
 }
+/* end fig02 */
